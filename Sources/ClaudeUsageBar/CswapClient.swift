@@ -1,0 +1,181 @@
+import Foundation
+
+struct CswapClient {
+    private let cswapPaths = [
+        "~/.local/bin/cswap",
+        "/opt/homebrew/bin/cswap",
+        "/usr/local/bin/cswap"
+    ]
+
+    func fetch() async throws -> CswapData {
+        async let status = runCswap(["status", "--json"])
+        async let list = runCswap(["list", "--json"])
+
+        let statusData = try await status
+        let listData = try await list
+
+        let decoder = JSONDecoder()
+        let statusOutput = try decoder.decode(CswapStatusOutput.self, from: statusData)
+        let listOutput = try decoder.decode(CswapListOutput.self, from: listData)
+
+        let accounts = listOutput.accounts.map { CswapAccount($0) }
+        let active = CswapAccount(statusOutput.active, isActive: true)
+
+        return CswapData(active: active, accounts: accounts, updatedAt: Date())
+    }
+
+    private func runCswap(_ arguments: [String]) async throws -> Data {
+        let executable = cswapExecutable()
+        let processArguments = executable.path == "/usr/bin/env" ? ["cswap"] + arguments : arguments
+
+        return try await run(executable, arguments: processArguments)
+    }
+
+    private func cswapExecutable() -> URL {
+        for path in cswapPaths {
+            let expanded = NSString(string: path).expandingTildeInPath
+            if FileManager.default.isExecutableFile(atPath: expanded) {
+                return URL(fileURLWithPath: expanded)
+            }
+        }
+
+        return URL(fileURLWithPath: "/usr/bin/env")
+    }
+
+    private func run(_ executable: URL, arguments: [String]) async throws -> Data {
+        try await withCheckedThrowingContinuation { continuation in
+            let process = Process()
+            process.executableURL = executable
+            process.arguments = arguments
+
+            let output = Pipe()
+            let error = Pipe()
+            process.standardOutput = output
+            process.standardError = error
+
+            let box = ContinuationBox(continuation)
+
+            process.terminationHandler = { process in
+                let data = output.fileHandleForReading.readDataToEndOfFile()
+                let errorData = error.fileHandleForReading.readDataToEndOfFile()
+
+                if process.terminationStatus == 0 {
+                    box.finish(.success(data))
+                } else {
+                    let stdout = String(data: data, encoding: .utf8) ?? ""
+                    let stderr = String(data: errorData, encoding: .utf8) ?? ""
+                    box.finish(.failure(CswapError.commandFailed(stderr.isEmpty ? stdout : stderr)))
+                }
+            }
+
+            do {
+                try process.run()
+            } catch {
+                box.finish(.failure(error))
+                return
+            }
+
+            Task {
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                if process.isRunning {
+                    process.terminate()
+                    box.finish(.failure(CswapError.commandTimedOut))
+                }
+            }
+        }
+    }
+}
+
+struct CswapData: Equatable {
+    var active: CswapAccount
+    var accounts: [CswapAccount]
+    var updatedAt: Date
+}
+
+struct CswapAccount: Identifiable, Equatable {
+    var id: Int { number }
+
+    var number: Int
+    var email: String
+    var active: Bool
+    var usageStatus: String?
+    var fiveHour: CswapUsageWindow?
+
+    fileprivate init(_ dto: CswapAccountDTO, isActive: Bool? = nil) {
+        number = dto.number
+        email = dto.email
+        active = isActive ?? dto.active ?? false
+        usageStatus = dto.usageStatus
+        fiveHour = dto.usage?.fiveHour.map(CswapUsageWindow.init)
+    }
+}
+
+struct CswapUsageWindow: Equatable {
+    var percent: Double?
+    var resetAt: Date?
+    var countdown: String?
+
+    fileprivate init(_ dto: CswapUsageWindowDTO) {
+        percent = dto.pct.map { min(max($0 / 100, 0), 1) }
+        resetAt = dto.resetsAt.flatMap(TimeFormatter.date)
+        countdown = dto.countdown
+    }
+}
+
+private struct CswapListOutput: Decodable {
+    var accounts: [CswapAccountDTO]
+}
+
+private struct CswapStatusOutput: Decodable {
+    var active: CswapAccountDTO
+}
+
+private struct CswapAccountDTO: Decodable {
+    var number: Int
+    var email: String
+    var active: Bool?
+    var usageStatus: String?
+    var usage: CswapUsageDTO?
+}
+
+private struct CswapUsageDTO: Decodable {
+    var fiveHour: CswapUsageWindowDTO?
+}
+
+private struct CswapUsageWindowDTO: Decodable {
+    var pct: Double?
+    var resetsAt: String?
+    var countdown: String?
+}
+
+private final class ContinuationBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Data, Error>?
+
+    init(_ continuation: CheckedContinuation<Data, Error>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ result: Result<Data, Error>) {
+        lock.lock()
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+
+        continuation?.resume(with: result)
+    }
+}
+
+enum CswapError: LocalizedError {
+    case commandFailed(String)
+    case commandTimedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .commandFailed(let message):
+            return message.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .commandTimedOut:
+            return "cswap command timed out."
+        }
+    }
+}

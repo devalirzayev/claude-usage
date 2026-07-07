@@ -1,0 +1,83 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build macOS app
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build app
+        run: make app
+
+      - name: Sign app when Developer ID secrets exist
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_CERTIFICATE_PASSWORD }}
+          CODESIGN_IDENTITY: ${{ secrets.DEVELOPER_ID_APPLICATION_IDENTITY }}
+          KEYCHAIN_PASSWORD: ${{ secrets.RELEASE_KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          APP="build/Claude Usage.app"
+
+          if [[ -z "${CERTIFICATE_BASE64:-}" || -z "${CERTIFICATE_PASSWORD:-}" || -z "${CODESIGN_IDENTITY:-}" ]]; then
+            echo "Developer ID signing secrets are not configured. Using ad-hoc signing."
+            codesign --force --deep --sign - "$APP"
+            codesign --verify --deep --strict --verbose=2 "$APP"
+            exit 0
+          fi
+
+          KEYCHAIN="$RUNNER_TEMP/release-signing.keychain-db"
+          KEYCHAIN_PASSWORD="${KEYCHAIN_PASSWORD:-temporary-release-keychain-password}"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/developer-id.p12"
+          security import "$RUNNER_TEMP/developer-id.p12" \
+            -k "$KEYCHAIN" \
+            -P "$CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign
+
+          security list-keychains -d user -s "$KEYCHAIN"
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN"
+
+          codesign --force --deep --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Package app
+        run: |
+          set -euo pipefail
+
+          ditto -c -k --keepParent "build/Claude Usage.app" Claude-Usage.zip
+          shasum -a 256 Claude-Usage.zip > Claude-Usage.zip.sha256
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          TAG="v$(date -u +'%Y.%m.%d').${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            Claude-Usage.zip \
+            Claude-Usage.zip.sha256 \
+            --target "$GITHUB_SHA" \
+            --title "Claude Usage $TAG" \
+            --notes "Automated release for ${GITHUB_SHA}."
