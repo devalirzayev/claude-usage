@@ -18,10 +18,14 @@ struct CswapClient {
         let statusOutput = try decoder.decode(CswapStatusOutput.self, from: statusData)
         let listOutput = try decoder.decode(CswapListOutput.self, from: listData)
 
-        let accounts = listOutput.accounts.map { CswapAccount($0) }
         let active = CswapAccount(statusOutput.active, isActive: true)
+        let accounts = listOutput.accounts.map { CswapAccount($0, isActive: $0.number == active.number) }
 
         return CswapData(active: active, accounts: accounts, updatedAt: Date())
+    }
+
+    func switchAccount(number: Int) async throws {
+        _ = try await runCswap(["switch", String(number), "--json"])
     }
 
     private func runCswap(_ arguments: [String]) async throws -> Data {

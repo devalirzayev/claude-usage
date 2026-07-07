@@ -63,7 +63,11 @@ private struct UsageContent: View {
 
             if !usage.accounts.isEmpty {
                 Divider()
-                AccountsList(accounts: usage.accounts)
+                AccountsList(
+                    accounts: usage.accounts,
+                    switchingAccountNumber: usage.switchingAccountNumber,
+                    switchAccount: usage.switchAccount
+                )
             }
 
             HStack {
@@ -105,6 +109,8 @@ private struct UsageContent: View {
 
 private struct AccountsList: View {
     let accounts: [CswapAccount]
+    let switchingAccountNumber: Int?
+    let switchAccount: (CswapAccount) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -152,6 +158,12 @@ private struct AccountsList: View {
                             .foregroundStyle(.secondary)
                             .monospacedDigit()
                     }
+
+                    Button(buttonTitle(for: account)) {
+                        switchAccount(account)
+                    }
+                    .controlSize(.small)
+                    .disabled(account.active || switchingAccountNumber != nil)
                 }
             }
         }
@@ -160,6 +172,12 @@ private struct AccountsList: View {
     private func percentText(_ percent: Double?) -> String {
         guard let percent else { return "--%" }
         return "\(Int((percent * 100).rounded()))%"
+    }
+
+    private func buttonTitle(for account: CswapAccount) -> String {
+        if account.active { return "Active" }
+        if switchingAccountNumber == account.number { return "Switching" }
+        return "Switch"
     }
 }
 

@@ -5,9 +5,11 @@ final class UsageModel: ObservableObject {
     @Published private(set) var snapshot = UsageSnapshot.loading
     @Published private(set) var activeAccount: CswapAccount?
     @Published private(set) var accounts: [CswapAccount] = []
+    @Published private(set) var switchingAccountNumber: Int?
 
     private let client: CswapClient
     private var refreshTask: Task<Void, Never>?
+    private var switchTask: Task<Void, Never>?
 
     init(client: CswapClient) {
         self.client = client
@@ -16,11 +18,28 @@ final class UsageModel: ObservableObject {
 
     deinit {
         refreshTask?.cancel()
+        switchTask?.cancel()
     }
 
     func refreshNow() {
         refreshTask?.cancel()
         refreshTask = Task { await run() }
+    }
+
+    func switchAccount(_ account: CswapAccount) {
+        guard !account.active, switchingAccountNumber == nil else { return }
+
+        switchingAccountNumber = account.number
+        switchTask = Task {
+            do {
+                try await client.switchAccount(number: account.number)
+                await refresh()
+            } catch {
+                snapshot = .failed(message: error.localizedDescription, updatedAt: Date())
+            }
+
+            switchingAccountNumber = nil
+        }
     }
 
     private func run() async {
