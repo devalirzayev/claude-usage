@@ -9,7 +9,9 @@ cswap status --json
 cswap list --json
 ```
 
-It shows the active account's 5h usage in the menu bar and lists all managed accounts in the popup.
+It shows the active account's 5h usage in the menu bar. The popup lists all managed accounts with their 5h usage plus any scoped usage windows reported by `cswap`, such as weekly Fable usage.
+
+A self-contained `cswap` build is bundled inside the app (`Contents/Resources/cswap/`), so nothing else needs to be installed. The app prefers the bundled copy and falls back to a `cswap` found in `~/.local/bin`, `/opt/homebrew/bin`, or `/usr/local/bin`.
 
 Build and run:
 
@@ -25,8 +27,16 @@ build/Claude Usage.app
 
 Requirements:
 
-- macOS 13 or newer.
-- `cswap` installed and configured with managed accounts.
+- macOS 13 or newer on Apple Silicon (the bundled `cswap` is an arm64 build).
+- `cswap` accounts configured (`cswap add`), either through the bundled binary or a separate install.
+
+Updating the bundled cswap:
+
+```sh
+make vendor-cswap
+```
+
+This rebuilds `Vendor/cswap.zip` with PyInstaller. Set `CSWAP_VERSION` to pin a different `claude-swap` release; it needs a Python 3.12+ with a shared libpython (python.org or Homebrew builds).
 
 Releases:
 

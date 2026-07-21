@@ -11,17 +11,7 @@ struct CswapClient {
         async let status = runCswap(["status", "--json"])
         async let list = runCswap(["list", "--json"])
 
-        let statusData = try await status
-        let listData = try await list
-
-        let decoder = JSONDecoder()
-        let statusOutput = try decoder.decode(CswapStatusOutput.self, from: statusData)
-        let listOutput = try decoder.decode(CswapListOutput.self, from: listData)
-
-        let active = CswapAccount(statusOutput.active, isActive: true)
-        let accounts = listOutput.accounts.map { CswapAccount($0, isActive: $0.number == active.number) }
-
-        return CswapData(active: active, accounts: accounts, updatedAt: Date())
+        return try CswapData.decode(status: try await status, list: try await list)
     }
 
     func switchAccount(number: Int) async throws {
@@ -36,6 +26,13 @@ struct CswapClient {
     }
 
     private func cswapExecutable() -> URL {
+        if let resources = Bundle.main.resourceURL {
+            let bundled = resources.appendingPathComponent("cswap/cswap")
+            if FileManager.default.isExecutableFile(atPath: bundled.path) {
+                return bundled
+            }
+        }
+
         for path in cswapPaths {
             let expanded = NSString(string: path).expandingTildeInPath
             if FileManager.default.isExecutableFile(atPath: expanded) {
@@ -94,6 +91,17 @@ struct CswapData: Equatable {
     var active: CswapAccount
     var accounts: [CswapAccount]
     var updatedAt: Date
+
+    static func decode(status statusData: Data, list listData: Data, updatedAt: Date = Date()) throws -> CswapData {
+        let decoder = JSONDecoder()
+        let statusOutput = try decoder.decode(CswapStatusOutput.self, from: statusData)
+        let listOutput = try decoder.decode(CswapListOutput.self, from: listData)
+
+        let active = CswapAccount(statusOutput.active, isActive: true)
+        let accounts = listOutput.accounts.map { CswapAccount($0, isActive: $0.number == active.number) }
+
+        return CswapData(active: active, accounts: accounts, updatedAt: updatedAt)
+    }
 }
 
 struct CswapAccount: Identifiable, Equatable {
@@ -104,6 +112,7 @@ struct CswapAccount: Identifiable, Equatable {
     var active: Bool
     var usageStatus: String?
     var fiveHour: CswapUsageWindow?
+    var scoped: [CswapScopedWindow]
 
     fileprivate init(_ dto: CswapAccountDTO, isActive: Bool? = nil) {
         number = dto.number
@@ -111,6 +120,21 @@ struct CswapAccount: Identifiable, Equatable {
         active = isActive ?? dto.active ?? false
         usageStatus = dto.usageStatus
         fiveHour = dto.usage?.fiveHour.map(CswapUsageWindow.init)
+        scoped = (dto.usage?.scoped ?? []).compactMap(CswapScopedWindow.init)
+    }
+}
+
+struct CswapScopedWindow: Identifiable, Equatable {
+    var id: String { name }
+
+    var name: String
+    var window: CswapUsageWindow
+
+    fileprivate init?(_ dto: CswapScopedWindowDTO) {
+        guard let name = dto.name, !name.isEmpty else { return nil }
+
+        self.name = name
+        window = CswapUsageWindow(CswapUsageWindowDTO(pct: dto.pct, resetsAt: dto.resetsAt, countdown: dto.countdown))
     }
 }
 
@@ -144,12 +168,20 @@ private struct CswapAccountDTO: Decodable {
 
 private struct CswapUsageDTO: Decodable {
     var fiveHour: CswapUsageWindowDTO?
+    var scoped: [CswapScopedWindowDTO]?
 }
 
 private struct CswapUsageWindowDTO: Decodable {
     var pct: Double?
     var resetsAt: String?
     var countdown: String?
+}
+
+private struct CswapScopedWindowDTO: Decodable {
+    var pct: Double?
+    var resetsAt: String?
+    var countdown: String?
+    var name: String?
 }
 
 private final class ContinuationBox: @unchecked Sendable {

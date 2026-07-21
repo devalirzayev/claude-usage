@@ -144,6 +144,13 @@ private struct AccountsList: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }
+
+                        ForEach(account.scoped) { scoped in
+                            Text(scopedText(scoped))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
                     }
 
                     Spacer()
@@ -172,6 +179,20 @@ private struct AccountsList: View {
     private func percentText(_ percent: Double?) -> String {
         guard let percent else { return "--%" }
         return "\(Int((percent * 100).rounded()))%"
+    }
+
+    private func scopedText(_ scoped: CswapScopedWindow) -> String {
+        let base = "\(scoped.name) \(percentText(scoped.window.percent))"
+
+        if let resetAt = scoped.window.resetAt {
+            return "\(base) · \(TimeFormatter.shortTime(until: resetAt))"
+        }
+
+        if let countdown = scoped.window.countdown {
+            return "\(base) · \(countdown)"
+        }
+
+        return base
     }
 
     private func buttonTitle(for account: CswapAccount) -> String {

@@ -14,6 +14,11 @@ let package = Package(
         .executableTarget(
             name: "ClaudeUsageBar",
             path: "Sources/ClaudeUsageBar"
+        ),
+        .testTarget(
+            name: "ClaudeUsageBarTests",
+            dependencies: ["ClaudeUsageBar"],
+            path: "Tests/ClaudeUsageBarTests"
         )
     ],
     swiftLanguageVersions: [.v5]
